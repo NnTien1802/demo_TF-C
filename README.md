@@ -1,118 +1,143 @@
-# GestureLab — TF-C Gesture Recognition (HAR → SGR)
+# GestureLab — Nhận dạng cử chỉ bằng TF-C
 
-Ứng dụng **Streamlit** nhận dạng **6 cử chỉ SGR** từ tín hiệu gia tốc ba trục bằng **TF-C Transformer gốc** được pre-train trên HAR (MAR) và fine-tune trên SGR. Không dùng DINOv3 ở phần deploy này.
+**GestureLab** là ứng dụng web minh họa bài toán **nhận dạng cử chỉ từ chuỗi tín hiệu gia tốc ba trục (X, Y, Z)**. Ứng dụng sử dụng mô hình **Time-Frequency Contrastive Learning (TF-C)** với hai nhánh trích xuất đặc trưng miền thời gian và miền tần số, kết hợp bộ phân loại được fine-tune trên dữ liệu **SGR**.
 
-Ứng dụng có giao diện tiếng Việt: **thử mẫu SGR có sẵn**, **tải CSV, NPZ hoặc Sensor Logger ZIP**, **xem X/Y/Z**, **xem điểm dự đoán từng lớp**, và **tải kết quả CSV**. Tất cả dự đoán đều đến từ checkpoint được huấn luyện; không có chế độ dự đoán mô phỏng.
+> **Phạm vi:** Bản demo này sử dụng **Transformer Encoder của TF-C gốc**, **không sử dụng DINOv3**. Phần thay backbone DINOv3 là một nhiệm vụ nghiên cứu riêng.
 
-## Giao diện v2 — Đã cải tiến (không thay đổi model)
+**Trải nghiệm trực tuyến:** [gesturelab-tfc-demo.streamlit.app](https://gesturelab-tfc-demo.streamlit.app/)  
+**Dữ liệu tham khảo và dữ liệu tự thu thập:** [Dataset TF-C trên Kaggle](https://www.kaggle.com/datasets/nguynngctin1881/dataset-tf-c)
 
-Bản v2 chỉ thay đổi giao diện `app.py`, theme `.streamlit/config.toml` và cố định thêm thư viện vẽ biểu đồ trong `requirements.txt`. Các file `model_runtime.py`, `data_io.py`, dữ liệu mẫu và logic suy luận **giữ nguyên**. Không cần huấn luyện lại checkpoint.
+## 1. Tổng quan và bài toán
 
-Cải tiến chính:
-- Chọn nhanh theo **6 loại cử chỉ** và lựa chọn mẫu tham chiếu SGR.
-- Thẻ **kết quả nhanh** xuất hiện ngay dưới nút phân loại, không cần cuộn tới cuối trang.
-- Có đối chiếu **nhãn dự đoán / nhãn thực tế / trạng thái khớp hoặc chưa khớp** khi dữ liệu có nhãn. Với file CSV không có nhãn, giao diện không tự suy đoán đúng/sai.
-- Biểu đồ điểm Softmax **thanh ngang** đọc được tên các cử chỉ tiếng Việt.
-- Biểu đồ gia tốc, dữ liệu CSV/NPZ/ZIP, bảng và nút tải kết quả vẫn hoạt động theo luồng cũ.
-- Ghim `numpy==1.26.4`, `pyarrow==17.0.0` để tránh lỗi xung đột PyArrow khi vẽ biểu đồ.
+GestureLab tiếp nhận chuỗi gia tốc ba trục và dự đoán **một trong sáu cử chỉ**:
 
-**Cập nhật dự án đang chạy:** Sao lưu `app.py`, thay bằng bản v2, cập nhật `.streamlit/config.toml` và `requirements.txt`. Giữ nguyên thư mục `models/` đang có chứa checkpoint thật. Kích hoạt môi trường `tfc-web`, chạy `python -m pip install -r requirements.txt`, sau đó `python -m streamlit run app.py`. Nếu chỉ muốn dùng giao diện mới ở môi trường đã cài đầy đủ, bạn có thể thay riêng `app.py`.
+| Nhãn | Ý nghĩa |
+|---|---|
+| `typing` | Gõ phím |
+| `teeth` | Đánh răng |
+| `drinking` | Uống nước |
+| `writing` | Viết chữ |
+| `clapping` | Vỗ tay |
+| `folding` | Gấp đồ |
 
-**Lưu ý kiểm thử:** Cú pháp Python của các file đã được kiểm tra. Ứng dụng cần được chạy và kiểm tra với checkpoint `models/tfc_har_to_sgr_safe.pt` trên máy của bạn để xác nhận toàn bộ dự đoán, vì checkpoint đã huấn luyện không nằm trong bản ZIP này.
-
-## 1. Cấu trúc dự án
-
-```text
-TFC_SGR_Streamlit/
-├── app.py                         # Giao diện Streamlit
-├── model_runtime.py               # TF-C Encoder + Classifier đúng bản đã huấn luyện
-├── data_io.py                     # Đọc CSV / NPZ / ZIP, tạo cửa sổ 206 điểm
-├── prepare_checkpoint.py          # Chuyển checkpoint tin cậy thành dạng an toàn
-├── requirements.txt
-├── .streamlit/config.toml
-├── samples/
-│   ├── sgr_examples.npz           # 12 mẫu SGR test thật (2 mẫu/lớp)
-│   └── sgr_normalized_csv_example.csv
-└── models/
-    ├── tfc_har_to_sgr_safe.pt      # BẠN cần tạo từ checkpoint huấn luyện local
-    └── training_results.json       # Tùy chọn: sao chép báo cáo kết quả local
-```
-
-**Lưu ý:** Không kèm checkpoint đã huấn luyện trong ZIP này vì checkpoint đó đang nằm trên máy Windows của bạn. Không tạo hay thay bằng trọng số giả để trình diễn.
-
-## 2. Chuẩn bị mô hình bạn đã huấn luyện
-
-Bạn đã có checkpoint:
+Quy trình xử lý:
 
 ```text
-C:\AI_projects\TFC_HAR_SGR_Train\exported_model\tfc_har_to_sgr_best.pt
+Mẫu SGR / CSV / NPZ / Sensor Logger ZIP
+                    ↓
+       Kiểm tra và xử lý tín hiệu
+                    ↓
+          Tensor [N, 3, 206]
+                    ↓
+       TF-C Time + Frequency Encoders
+                    ↓
+         SGR Classifier (6 lớp)
+                    ↓
+ Nhãn dự đoán + điểm Softmax + biểu đồ
 ```
 
-File gốc lưu một số metadata dưới dạng NumPy scalar, dẫn tới lỗi khi nạp với `weights_only=True`. Dùng công cụ đi kèm để chuyển nó thành checkpoint chỉ gồm **tensor và kiểu dữ liệu Python an toàn**, rồi nạp bằng `weights_only=True` trên Cloud.
+Mô hình được **khởi tạo từ checkpoint encoder đã pre-train trên HAR** (trong quá trình thử nghiệm từng đặt tên MAR, là HAR được đổi tên) rồi **fine-tune trên SGR**. Đầu ra của ứng dụng là **sáu cử chỉ SGR**, không phải bốn nhãn hoạt động HAR.
 
-Trên CMD Windows, sau khi giải nén dự án:
+## 2. Chức năng chính
 
-```bat
-conda activate C:\Users\admin\miniconda3\envs\tfc
-cd /d C:\AI_projects\TFC_SGR_Streamlit
-python prepare_checkpoint.py --source "C:\AI_projects\TFC_HAR_SGR_Train\exported_model\tfc_har_to_sgr_best.pt"
-copy "C:\AI_projects\TFC_HAR_SGR_Train\exported_model\training_results.json" "models\training_results.json"
-```
+- **Thử nhanh mẫu SGR:** chọn loại cử chỉ và mẫu thử có sẵn để dự đoán mà không cần tải file.
+- **Tải dữ liệu:** hỗ trợ `.csv`, `.npz` và `.zip` xuất từ Sensor Logger có `Accelerometer.csv`.
+- **Trực quan hóa:** hiển thị tín hiệu X/Y/Z theo từng cửa sổ, kèm độ lệch chuẩn (Std), biên độ đỉnh (Peak), RMS và nhận xét thống kê.
+- **Dự đoán:** hiển thị nhãn, điểm Softmax của lớp được chọn và biểu đồ điểm dự đoán cho cả sáu lớp.
+- **Đối chiếu:** báo trạng thái khớp/chưa khớp khi đầu vào có nhãn tham chiếu; không tự suy đoán nhãn thật cho file không có nhãn.
+- **Xuất dữ liệu:** tải kết quả suy luận theo cửa sổ dưới dạng CSV.
 
-Lệnh đầu tạo:
+Các chỉ số Std, Peak và RMS là **thống kê tín hiệu**, không phải một mô hình AI khác hoặc phép xác định cử chỉ độc lập. Điểm Softmax cũng không được hiểu là mức độ chính xác đã được bảo đảm trong mọi điều kiện.
+
+## 3. Kiến trúc mô hình và kết quả thử nghiệm
+
+Ứng dụng sử dụng TF-C với **hai Transformer Encoder**, mỗi nhánh gồm **hai Transformer layers**. Đặc trưng của hai nhánh được đưa qua projection heads, ghép lại và truyền vào classifier sáu lớp. Mô hình nhận tensor đầu vào `[N, 3, 206]`.
+
+- **Nguồn pre-training:** HAR (dữ liệu gia tốc điện thoại, bốn nhãn hoạt động).
+- **Fine-tuning / downstream:** SGR (dữ liệu gia tốc đồng hồ thông minh, sáu nhãn cử chỉ).
+- **Số epoch fine-tuning trong lần xuất mô hình:** 15.
+- **Checkpoint triển khai:** `models/tfc_har_to_sgr_safe.pt` (gồm encoder và classifier; chạy suy luận bằng CPU).
+
+Kết quả do script huấn luyện/đánh giá của dự án ghi nhận:
+
+| Chỉ số | Giá trị |
+|---|---:|
+| Test Accuracy | **80,67%** |
+| Test Macro-F1 | **80,84%** |
+| Test Loss | **0,8236** |
+
+**Lưu ý khi diễn giải:** Trong lần chạy này, validation Macro-F1 tốt nhất khoảng **40,10%**, thấp hơn đáng kể so với kết quả test. Cần kiểm tra thêm cách chia dữ liệu và quy trình đánh giá trước khi dùng các chỉ số trên để kết luận khả năng tổng quát hóa. Đây là **demo học thuật**, không phải hệ thống đã được kiểm định trong thực tế.
+
+## 4. Cấu trúc mã nguồn
 
 ```text
-models/tfc_har_to_sgr_safe.pt
+.
+├── app.py                          # Giao diện và điều khiển quy trình Streamlit
+├── data_io.py                      # Đọc, kiểm tra và chuẩn bị CSV / NPZ / ZIP
+├── model_runtime.py                # Định nghĩa TF-C gốc và suy luận sáu lớp
+├── prepare_checkpoint.py           # Chuyển checkpoint tự huấn luyện sang bản deploy
+├── requirements.txt                # Các thư viện cần thiết
+├── .streamlit/
+│   └── config.toml                 # Giao diện Streamlit
+├── models/
+│   └── tfc_har_to_sgr_safe.pt       # Encoder + classifier đã xuất
+└── samples/
+    ├── sgr_examples.npz            # Mẫu SGR để dùng thử
+    └── sgr_normalized_csv_example.csv
 ```
 
-Công cụ chỉ chạy **trên máy của bạn** và đọc checkpoint bạn tự huấn luyện với `weights_only=False` một lần. **Không** chạy nó đối với checkpoint từ người lạ. Ứng dụng Streamlit chỉ tải model đã chuyển đổi bằng `weights_only=True` và **không** chấp nhận người dùng upload `.pt` hoặc pickle.
+## 5. Cách chạy trên máy cá nhân
 
-## 3. Chạy giao diện trên Windows
+**Yêu cầu:** Python 3.11 và Conda (khuyến nghị). Không cần GPU và không cần cài DINOv3.
 
-Để không ảnh hưởng môi trường `tfc` Python 3.8 dùng cho train, khuyên tạo môi trường riêng cho giao diện **không có DINOv3**:
-
-```bat
+```bash
+# Tạo môi trường riêng (chỉ cần chạy một lần)
 conda create -n tfc-web python=3.11 -y
 conda activate tfc-web
-cd /d C:\AI_projects\TFC_SGR_Streamlit
-python -c "import sys; print(sys.executable)"
+
+# Di chuyển tới thư mục chứa app.py
+cd <THU_MUC_DU_AN>
+
+# Cài thư viện
 python -m pip install -r requirements.txt
+
+# Chạy website
 python -m streamlit run app.py
 ```
 
-Ứng dụng mở ở `http://localhost:8501`.
+Mở trình duyệt tại **http://localhost:8501**.
 
-Nếu thiếu model, giao diện vẫn có thể hiển thị dữ liệu mẫu và đồ thị nhưng nút dự đoán sẽ bị khóa. Bạn phải hoàn thành mục 2 để chạy inference thật.
+Tệp `models/tfc_har_to_sgr_safe.pt` phải tồn tại để bật nút dự đoán. Nếu bạn có checkpoint tự huấn luyện nhưng chưa chuyển đổi, sử dụng **`prepare_checkpoint.py`** theo hướng dẫn trong mã nguồn và **chỉ nạp checkpoint từ nguồn tin cậy**. Ứng dụng không nhận tệp `.pt` do khách truy cập tải lên.
 
-## 4. Hỗ trợ CSV/NPZ
+## 6. Định dạng dữ liệu đầu vào
 
-- **CSV:** `x,y,z` với ít nhất 206 dòng; hỗ trợ thêm `seconds_elapsed` hoặc `time`, kể cả thứ tự cột `time,seconds_elapsed,z,y,x` do Sensor Logger xuất. Cắt cửa sổ **206 điểm**, bước trượt **100 điểm**, tối đa 100 cửa sổ mỗi lượt. **Không tự nội suy** theo tần số lấy mẫu vì tần số nguồn SGR không được nêu rõ trong gói dữ liệu đã dùng train.
-- **NPZ:** khóa `samples`, shape `[N,3,206]` hoặc `[N,206,3]`, có thể có `labels`. Chỉ nạp khi `allow_pickle=False`.
-- **Sensor Logger ZIP:** chứa một `Accelerometer.csv` duy nhất.
-- **Mẫu thử:** 12 mẫu **đã chuẩn hóa** được rút trực tiếp từ SGR test, không phải dữ liệu giả. `samples/sgr_normalized_csv_example.csv` là một mẫu CSV đã chuẩn hóa; khi tải mẫu này, chọn **Đã chuẩn hóa theo SGR**.
+| Loại | Yêu cầu |
+|---|---|
+| **CSV** | Có cột `x`, `y`, `z`; hỗ trợ thêm `time` hoặc `seconds_elapsed`. Có thể tải CSV từ Sensor Logger. |
+| **NPZ** | Chứa mảng `samples` dạng `[N, 3, 206]` hoặc `[N, 206, 3]`; có thể có `labels`. |
+| **ZIP** | File xuất Sensor Logger chứa `Accelerometer.csv`. |
 
-Nếu tải **gia tốc thô**, ứng dụng dùng mean/std từ file `data/SGR/README.md` của gói dữ liệu huấn luyện:
+Với chuỗi liên tục, ứng dụng tạo các **cửa sổ 206 điểm, bước trượt 100 điểm**. Người dùng cần chọn đúng chế độ **dữ liệu thô** hoặc **đã chuẩn hóa theo SGR**. Ứng dụng không tự coi tín hiệu có tần số lấy mẫu khác nhau là tương đương về mặt thực nghiệm.
 
-| Trục | Mean (train SGR) | Std (train SGR) |
-|---|---:|---:|
-| X | -2.00637245 | 5.04262161 |
-| Y | -4.74350595 | 4.82831144 |
-| Z | 3.29379106 | 4.80061388 |
+**Giới hạn dữ liệu:** Model được huấn luyện cho **cử chỉ từ cảm biến đồng hồ thông minh**. Dữ liệu gia tốc từ điện thoại có thể được đọc và đưa qua pipeline về mặt kỹ thuật, nhưng các dự đoán trên nguồn dữ liệu khác SGR **chưa được xác thực độ chính xác**. Dữ liệu HAR tự thu thập (Walking, Stairs, Sitting, Standing) **không** đồng nghĩa với sáu nhãn của classifier SGR.
 
-**Quan trọng về tính khoa học:** Model được fine-tune cho **cử chỉ trên đồng hồ thông minh** gồm `typing, teeth, drinking, writing, clapping, folding`. CSV/ZIP từ cảm biến **điện thoại** vẫn đọc được về kỹ thuật nhưng khác nguồn thiết bị, hướng đặt và phân bố. Không thể dùng model SGR này để nhận dạng chính xác bốn nhãn HAR `Walking/Stairs/Sitting/Standing` mà không huấn luyện lại cho HAR.
+## 7. Triển khai trực tuyến
 
-## 5. Deploy lên Streamlit Community Cloud
+Ứng dụng được triển khai bằng **Streamlit Community Cloud** từ repository GitHub này, với:
 
-1. Push các file dự án lên **GitHub repository của bạn**, bao gồm `models/tfc_har_to_sgr_safe.pt` đã kiểm tra và hai file demo trong `samples/`. Kiểm tra quyền công khai checkpoint/dataset trước khi push.
-2. Vào [Streamlit Community Cloud](https://share.streamlit.io/), đăng nhập bằng GitHub, chọn **Create app**.
-3. Chọn repository của bạn, branch chính, và đặt **Main file path = `app.py`**.
-4. Deploy rồi chờ môi trường cài `requirements.txt`. Ứng dụng chỉ chạy CPU (không yêu cầu GPU).
-5. Mở link công khai, chọn mẫu **SGR** → **Phân loại bằng TF-C**, thử cả file CSV mẫu. Kiểm tra tab **Về mô hình** xem báo cáo kết quả (nếu đã sao chép JSON).
+- **Nhánh triển khai:** `main`
+- **Entry point:** `app.py`
+- **Phụ thuộc:** `requirements.txt`
+- **Mô hình:** `models/tfc_har_to_sgr_safe.pt`
 
-Tránh push token Hugging Face, khóa API, dữ liệu cá nhân hoặc bất kỳ file nhạy cảm nào. App có thể ngủ khi không có truy cập; người chấm có thể đánh thức bằng link.
+**Link demo:** https://gesturelab-tfc-demo.streamlit.app/
 
-## 6. Tham khảo và ghi nhận
+Ứng dụng có thể cần thời gian khởi động lại sau khi ở trạng thái ngủ. Khi thử nghiệm, nên chọn mẫu SGR trước để kiểm tra mô hình, sau đó mới tải CSV/NPZ/ZIP của riêng bạn.
 
-- TF-C pretraining: https://github.com/mims-harvard/TFC-pretraining
-- Dữ liệu đã đăng Kaggle: https://www.kaggle.com/datasets/nguynngctin1881/dataset-tf-c
-- Đây là ứng dụng nghiên cứu được phát triển thêm, **không phải giao diện chính thức của nhóm tác giả TF-C**.
+## 8. Nguồn tham khảo và ghi nhận
+
+- **TF-C — mã nguồn nghiên cứu gốc:** [mims-harvard/TFC-pretraining](https://github.com/mims-harvard/TFC-pretraining).
+- **Dữ liệu HAR/SGR và dữ liệu tự thu thập phục vụ dự án:** [Dataset TF-C trên Kaggle](https://www.kaggle.com/datasets/nguynngctin1881/dataset-tf-c). Dữ liệu HAR/SGR có nguồn gốc bên ngoài; cần ghi nhận nguồn và tuân thủ giấy phép phân phối tương ứng.
+- **Streamlit:** [streamlit.io](https://streamlit.io/).
+
+GestureLab là **ứng dụng minh họa được phát triển dựa trên TF-C**, không phải giao diện chính thức do nhóm tác giả TF-C công bố. Các kết quả thực nghiệm được nêu theo log của phiên bản dự án này, không đại diện cho toàn bộ kết quả trong bài báo gốc.
